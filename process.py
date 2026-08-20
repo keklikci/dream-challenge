@@ -20,7 +20,9 @@ def one_hot_encode(sequence: str, max_length: int = 112) -> np.ndarray:
     return encoded.ravel()
 
 
-def create_one_hot_file(input_path: str | Path, output_path: str | Path, limit=None) -> None:
+def create_one_hot_file(
+    input_path: str | Path, output_path: str | Path, limit=None
+) -> None:
     """Write one-hot features and labels to a compressed NumPy file."""
     rows = parse_rows(input_path)
     if limit is not None:

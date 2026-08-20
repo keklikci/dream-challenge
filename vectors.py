@@ -48,21 +48,33 @@ def kmerize_sequence(sequence: str, size: int = 4, stride: int = 1) -> list[str]
     return [core[i : i + size] for i in range(0, len(core) - size + 1, stride)]
 
 
-def kmerize(filename: str | Path, stride: int = 1, size: int = 4, limit: int | None = None):
+def kmerize(
+    filename: str | Path, stride: int = 1, size: int = 4, limit: int | None = None
+):
     """Generate k-mer strings and expression values."""
     rows = parse_rows(filename)
     if limit is not None:
         rows = rows[:limit]
     sequences = [sequence for sequence, _ in rows]
-    kmers = [",".join(kmerize_sequence(sequence, size, stride)) for sequence in sequences]
+    kmers = [
+        ",".join(kmerize_sequence(sequence, size, stride)) for sequence in sequences
+    ]
     expressions = np.array([expression for _, expression in rows], dtype=np.float32)
     return pd.DataFrame({"sequence": sequences, "kmers": kmers}), expressions
 
 
-def tokenize(size=4, input_path="data/train_sequences.txt", submission=False, limit=None):
+def tokenize(
+    size=4, input_path="data/train_sequences.txt", submission=False, limit=None
+):
     """Create a k-mer frequency matrix."""
     database, expressions = kmerize(input_path, size=size, limit=limit)
-    vectorizer = CountVectorizer(tokenizer=lambda value: value.split(","), token_pattern=None)
+    vectorizer = CountVectorizer(
+        tokenizer=lambda value: value.split(","), token_pattern=None
+    )
     matrix = vectorizer.fit_transform(database["kmers"])
-    vectors = pd.DataFrame(matrix.toarray(), index=database["sequence"], columns=vectorizer.get_feature_names_out())
+    vectors = pd.DataFrame(
+        matrix.toarray(),
+        index=database["sequence"],
+        columns=vectorizer.get_feature_names_out(),
+    )
     return vectors, expressions, submission
