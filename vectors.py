@@ -1,94 +1,68 @@
-from tqdm import tqdm
+"""Sequence parsing and k-mer feature generation."""
+
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import CountVectorizer
-import numpy as np
 
-# kmerization might be an expensive process
-MEMORY_MODES = [15, 20, 25]
-while True:
-    try:
-        memory_mode = int(input('Please enter the percentage of allocated memory: '))
-    except ValueError:
-        print("Valid memory modes are 15, 20 or 25.")
-        continue
-    if memory_mode in MEMORY_MODES: break
-    else: print("Valid memory modes are 15, 20 or 25.")
+PREFIX = "TGCATTTTTTTCACATC"
+SUFFIX = "GGTTACGGCTGTT"
+NUCLEOTIDES = frozenset("ACTGN")
 
-# helper function
-def remove_prefix(text: str, prefix: str) -> str:
-    if text.startswith(prefix):
-        return text[len(prefix):]
-    raise ValueError(prefix)
 
-# helper function
-def remove_suffix(text: str, suffix: str) -> str:
-    if text.endswith(suffix):
-        return text[len(suffix):]
-    raise ValueError(suffix)
+def remove_prefix(text: str, prefix: str = PREFIX) -> str:
+    """Remove a required sequence prefix."""
+    if not text.startswith(prefix):
+        raise ValueError(f"Sequence does not start with {prefix}")
+    return text[len(prefix) :]
 
-# global variables
-TOTAL_SEQS = 6739258
-PREFIX = 'TGCATTTTTTTCACATC'
-SUFFIX = 'GGTTACGGCTGTT'
-MAX_SEQ_LEN = 142 - len(PREFIX) - len(SUFFIX)  # 112
-nuc_map = {k: i for i, k in enumerate(['A', 'C', 'T', 'G', 'N'])}
 
-# check if submission
-response = input("Intend to submit? If so, type 'yes'. If not, type 'no': ")
-if response == 'yes': is_submission = True
-else: is_submission = False
+def remove_suffix(text: str, suffix: str = SUFFIX) -> str:
+    """Remove a required sequence suffix."""
+    if not text.endswith(suffix):
+        raise ValueError(f"Sequence does not end with {suffix}")
+    return text[: -len(suffix)]
 
-# replace cutoff with commented statement on GPU
-cutoff = 1000
-# cutoff = int(TOTAL_SEQS // (100 / memory_mode))
 
-def kmerize(filename="./data/train_sequences.txt", stride=1, size=4):
-    """
-    Generate kmers for specified subset of sequences.
-    :param:
-           str filename: file with sequences.
-           int stride: slide of the window for kmer generation.
-           int size: size of the kmer.
-    :return:
-            pd.DataFrame: Pandas object with row pair as sequence and the corresponding kmer.
-            list exprs: expressions of promoter sequences.
-    """
-    sequences, kmers, exprs = [], [], []
-    with open(filename) as f:
-        for i, line in enumerate(tqdm(f.readlines())):
-            if i == cutoff:
-                print("Processing, done.")
-                break
-            seq, expr = line.split('\t')
-            exprs.append(float(expr.replace("\n", "")))
-            # keep original sequence 
-            sequences.append(seq)
-            seq = remove_suffix(remove_prefix(seq, PREFIX), SUFFIX)
-            try:
-                kmer = [seq[i:(i+size)] for i in range(0, stride, len(seq)) if len(seq[i:(i+size)]) == size]
-                kmer = ",".join(kmer)
-                kmers.append(kmer)
-            except IndexError:
-                pass
-    database = pd.DataFrame({'sequence': sequences, "kmers": kmers})
-    exprs = np.array(exprs, dtype=np.float16)
-    return database, exprs
+def parse_rows(filename: str | Path) -> list[tuple[str, float]]:
+    """Read tab separated sequence and expression rows."""
+    rows = []
+    with Path(filename).open() as handle:
+        for line_number, line in enumerate(handle, start=1):
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) != 2:
+                raise ValueError(f"Expected two fields on line {line_number}")
+            sequence, expression = fields
+            rows.append((sequence, float(expression)))
+    return rows
 
-def tokenize(size, is_submission=False):
-    """
-    Calculate frequency for each kmer given sequence.
-    :param:
-           int size: length of each kmer.
-           boolean is_submission: submission flag.
-    :return:
-            pd.DataFrame: Pandas object consisting of kmer frequencies indexed by sequences.
-            list exprs: expressions of promoter sequences.
-            boolean is_submission: submission flag.
-    """
-    if is_submission: database, exprs = kmerize(filename="./data/test_sequences.txt", stride=1, size=size)
-    else: database, exprs = kmerize(size=size)
-    vectorizer = CountVectorizer()
-    vectorizer.fit(database["kmers"])
-    data = vectorizer.transform(database["kmers"])
-    vectors = pd.DataFrame(data.toarray(), database["sequence"].values, vectorizer.get_feature_names())
-    return vectors, exprs, is_submission
+
+def kmerize_sequence(sequence: str, size: int = 4, stride: int = 1) -> list[str]:
+    """Return valid overlapping k-mers from a wrapped sequence."""
+    core = remove_suffix(remove_prefix(sequence))
+    if not set(core) <= NUCLEOTIDES:
+        raise ValueError("Sequence contains an invalid nucleotide")
+    if size < 1 or stride < 1:
+        raise ValueError("Size and stride must be positive")
+    return [core[i : i + size] for i in range(0, len(core) - size + 1, stride)]
+
+
+def kmerize(filename: str | Path, stride: int = 1, size: int = 4, limit: int | None = None):
+    """Generate k-mer strings and expression values."""
+    rows = parse_rows(filename)
+    if limit is not None:
+        rows = rows[:limit]
+    sequences = [sequence for sequence, _ in rows]
+    kmers = [",".join(kmerize_sequence(sequence, size, stride)) for sequence in sequences]
+    expressions = np.array([expression for _, expression in rows], dtype=np.float32)
+    return pd.DataFrame({"sequence": sequences, "kmers": kmers}), expressions
+
+
+def tokenize(size=4, input_path="data/train_sequences.txt", submission=False, limit=None):
+    """Create a k-mer frequency matrix."""
+    database, expressions = kmerize(input_path, size=size, limit=limit)
+    vectorizer = CountVectorizer(tokenizer=lambda value: value.split(","), token_pattern=None)
+    matrix = vectorizer.fit_transform(database["kmers"])
+    vectors = pd.DataFrame(matrix.toarray(), index=database["sequence"], columns=vectorizer.get_feature_names_out())
+    return vectors, expressions, submission
